@@ -1,0 +1,1 @@
+export default {content:["./index.html","./src/**/*.{ts,tsx}"],darkMode:"class",theme:{extend:{boxShadow:{glow:"0 0 35px rgba(61,255,157,.12)"},backgroundImage:{grid:"linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px)"}}}};
