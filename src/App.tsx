@@ -4,10 +4,14 @@ import {today,startWeek,pretty,bestStreak,addDays} from "./lib/date";
 import type {Task,Profile} from "./types";
 import {getDailyQuote} from "./lib/quotes";
 import {Card,Btn,TaskModal,Celebration} from "./components";
-import {LayoutDashboard,BarChart3,CalendarDays,Settings,LogOut,Plus,Check,Trash2,Edit3,Flame,Menu,X,Sun,Mail,MessageCircle,Send,Coffee,Award,BookOpen,Zap} from "lucide-react";
+import {LayoutDashboard,BarChart3,CalendarDays,Settings,LogOut,Plus,Check,Trash2,Edit3,Flame,Menu,X,Sun,Moon,Mail,MessageCircle,Send,Coffee,Award,BookOpen,Zap,Timer,Play,Pause,RotateCcw,Target,Maximize2,Minimize2,Bell} from "lucide-react";
 import {ResponsiveContainer,BarChart,Bar,XAxis,YAxis,Tooltip} from "recharts";
 
 const fallback={quote:"Small steps every day lead to big results.",author:"Be Better"};
+const defaultFocusDurations={focus:25,short:5,long:15};
+type FocusMode="focus"|"short"|"long";
+type FocusDurationSettings=typeof defaultFocusDurations;
+type FocusSession={date:string;seconds:number;mode:FocusMode;taskId:string|null};
 
 function achievementProgress(tasks:Task[],loginDates:string[]){
   const completed=tasks.filter(task=>task.completed);
@@ -177,6 +181,12 @@ function Shell({user}:{user:any}){
   const [page,setPage]=useState("dashboard");
   const [mobile,setMobile]=useState(false);
   const [profile,setProfile]=useState<Profile|null>(null);
+  const [lightMode,setLightMode]=useState(()=>localStorage.getItem("be-better-theme")==="light");
+
+  useEffect(()=>{
+    document.documentElement.classList.toggle("light",lightMode);
+    localStorage.setItem("be-better-theme",lightMode?"light":"dark")
+  },[lightMode]);
 
   useEffect(()=>{
     supabase.from("profiles").select("*").eq("id",user.id).maybeSingle().then(({data})=>setProfile(data))
@@ -193,7 +203,7 @@ function Shell({user}:{user:any}){
     return()=>window.removeEventListener("keydown",onKey)
   },[mobile]);
 
-  const nav=[["dashboard","Dashboard",LayoutDashboard],["analytics","Analytics",BarChart3],["journal","Journal",BookOpen],["awards","Awards",Award],["history","Calendar",CalendarDays],["settings","Settings",Settings]] as const;
+  const nav=[["dashboard","Dashboard",LayoutDashboard],["analytics","Analytics",BarChart3],["focus","🍅 Focus",Timer],["journal","Journal",BookOpen],["awards","Awards",Award],["history","Calendar",CalendarDays],["settings","Settings",Settings]] as const;
 
   return (
     <div className="min-h-screen flex">
@@ -224,11 +234,15 @@ function Shell({user}:{user:any}){
         <header className="h-16 border-b border-white/5 flex items-center justify-between px-4 md:px-8 backdrop-blur-xl bg-[#06100d]/40">
           <button onClick={()=>setMobile(true)} aria-label="Open menu" className="lg:hidden text-slate-300 hover:text-white"><Menu/></button>
           <Logo/>
-          <div className="text-sm text-slate-400 truncate max-w-[45%]">{profile?.name||user.email}</div>
+          <div className="flex items-center gap-3 max-w-[45%]">
+            <button type="button" onClick={()=>setLightMode(!lightMode)} aria-label={lightMode?"Switch to dark mode":"Switch to light mode"} title={lightMode?"Switch to dark mode":"Switch to light mode"} className="p-2 rounded-xl text-slate-400 hover:text-[#43f58f] hover:bg-white/5">{lightMode?<Moon size={18}/>:<Sun size={18}/>}</button>
+            <div className="text-sm text-slate-400 truncate">{profile?.name||user.email}</div>
+          </div>
         </header>
         <div className="max-w-7xl mx-auto p-4 md:p-8">
           {page==="dashboard"?<Dashboard user={user} profile={profile}/>
             :page==="analytics"?<Analytics user={user}/>
+            :page==="focus"?<Focus user={user}/>
             :page==="journal"?<Journal user={user}/>
             :page==="awards"?<Awards user={user}/>
             :page==="history"?<History user={user}/>
@@ -237,6 +251,90 @@ function Shell({user}:{user:any}){
       </main>
     </div>
   )
+}
+
+function Focus({user}:{user:any}){
+  const settingsKey=`be-better-focus-settings-${user.id}`;
+  const sessionsKey=`be-better-focus-sessions-${user.id}`;
+  const [durations,setDurations]=useState<FocusDurationSettings>(()=>{
+    try{return {...defaultFocusDurations,...JSON.parse(localStorage.getItem(settingsKey)||"{}")}}
+    catch{return defaultFocusDurations}
+  });
+  const [mode,setMode]=useState<FocusMode>("focus");
+  const [seconds,setSeconds]=useState(durations.focus*60);
+  const [running,setRunning]=useState(false);
+  const [hasStarted,setHasStarted]=useState(false);
+  const [focusMode,setFocusMode]=useState(false);
+  const [selectedTaskId,setSelectedTaskId]=useState("");
+  const [tasks,setTasks]=useState<Task[]>([]);
+  const [sessions,setSessions]=useState<FocusSession[]>(()=>{
+    try{return JSON.parse(localStorage.getItem(sessionsKey)||"[]")}
+    catch{return []}
+  });
+  const [celebrating,setCelebrating]=useState(false);
+  const currentDay=today();
+
+  useEffect(()=>{
+    supabase.from("tasks").select("*").eq("user_id",user.id).eq("due_date",currentDay).order("created_at").then(({data})=>setTasks(data||[]))
+  },[user.id,currentDay]);
+
+  useEffect(()=>{
+    if(!running)setSeconds(durations[mode]*60)
+  },[mode,durations.focus,durations.short,durations.long]);
+
+  function finishSession(){
+    setRunning(false);setHasStarted(false);setSeconds(0);setCelebrating(true);
+    const entry:FocusSession={date:currentDay,seconds:durations[mode]*60,mode,taskId:selectedTaskId||null};
+    setSessions(previous=>{const updated=[...previous,entry];localStorage.setItem(sessionsKey,JSON.stringify(updated));return updated});
+    if("Notification" in window&&Notification.permission==="granted")new Notification("Focus session complete",{body:"Nice work. Take a moment before your next session."});
+  }
+
+  useEffect(()=>{
+    if(!running)return;
+    const interval=window.setInterval(()=>setSeconds(value=>value<=1?(finishSession(),0):value-1),1000);
+    return()=>window.clearInterval(interval)
+  },[running,mode,selectedTaskId]);
+
+  const todaySessions=sessions.filter(session=>session.date===currentDay);
+  const totalFocusSeconds=todaySessions.filter(session=>session.mode==="focus").reduce((total,session)=>total+session.seconds,0);
+  const focusDates=[...new Set(sessions.filter(session=>session.mode==="focus").map(session=>session.date))];
+  const focusDateSet=new Set(focusDates);let focusStreak=0;const streakDate=new Date(currentDay+"T00:00:00");
+  while(focusDateSet.has(streakDate.toISOString().slice(0,10))){focusStreak++;streakDate.setDate(streakDate.getDate()-1)}
+  const goalSeconds=120*60;
+  const goalPercent=Math.min(100,Math.round(totalFocusSeconds/goalSeconds*100));
+  const minutes=Math.floor(seconds/60).toString().padStart(2,"0");
+  const remaining=(seconds%60).toString().padStart(2,"0");
+  const modeLabels:{key:FocusMode;label:string;minutes:number}[]=[{key:"focus",label:"Focus",minutes:durations.focus},{key:"short",label:"Short Break",minutes:durations.short},{key:"long",label:"Long Break",minutes:durations.long}];
+
+  function startTimer(){
+    if("Notification" in window&&Notification.permission==="default")Notification.requestPermission();
+    if(seconds===0)setSeconds(durations[mode]*60);
+    setHasStarted(true);setRunning(true)
+  }
+  function resetTimer(){setRunning(false);setHasStarted(false);setSeconds(durations[mode]*60)}
+  function selectMode(next:FocusMode){setRunning(false);setHasStarted(false);setMode(next);setSeconds(durations[next]*60)}
+
+  return <div className={focusMode?"fixed inset-0 z-50 overflow-y-auto bg-[#06100d] p-4 md:p-10":""}>
+    <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
+      <div><p className="text-xs tracking-[.25em] text-[#43f58f] font-bold">DEEP WORK • PRESENT MOMENT</p><h1 className="text-3xl md:text-4xl font-black mt-2">Focus</h1><p className="text-slate-400 mt-1">One clear interval. Then the next.</p></div>
+      <button type="button" onClick={()=>setFocusMode(!focusMode)} className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-white/10 bg-white/5 text-sm font-bold text-slate-300 hover:border-[#43f58f]/40 hover:text-[#43f58f]">{focusMode?<Minimize2 size={17}/>:<Maximize2 size={17}/>} {focusMode?"Exit Focus Mode":"Focus Mode"}</button>
+    </div>
+    <div className="max-w-4xl mx-auto">
+      <Card className={focusMode?"border-[#43f58f]/30 glow": ""}>
+        <div className="flex flex-wrap justify-center gap-2 mb-8">{modeLabels.map(item=><button key={item.key} type="button" onClick={()=>selectMode(item.key)} className={`px-4 py-2 rounded-xl text-sm font-bold border transition-colors ${mode===item.key?"bg-[#43f58f]/10 border-[#43f58f]/40 text-[#43f58f]":"border-white/10 text-slate-400 hover:text-white hover:bg-white/5"}`}>{item.label}</button>)}</div>
+        <div className="flex flex-col items-center">
+          <div className={`relative grid place-items-center rounded-full border-[10px] border-[#43f58f]/15 shadow-[0_0_70px_rgba(67,245,143,.1)] ${focusMode?"w-72 h-72 md:w-96 md:h-96":"w-60 h-60 md:w-72 md:h-72"}`}>
+            <div className="absolute inset-3 rounded-full border border-[#43f58f]/25"/><div className={`font-black tracking-tight ${focusMode?"text-7xl md:text-8xl":"text-6xl md:text-7xl"}`}>{minutes}:{remaining}</div><p className="absolute bottom-14 text-xs uppercase tracking-[.25em] text-[#43f58f]">{modeLabels.find(item=>item.key===mode)?.label}</p>
+          </div>
+          <div className="flex items-center gap-3 mt-8"><button type="button" onClick={running?()=>setRunning(false):startTimer} className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-[#43f58f] text-[#03140b] font-black shadow-[0_8px_24px_rgba(67,245,143,.18)]">{running?<Pause size={18}/>:hasStarted?<Play size={18}/>:<Play size={18}/>} {running?"Pause":hasStarted?"Resume":"Start"}</button><button type="button" onClick={resetTimer} aria-label="Reset timer" title="Reset timer" className="p-3 rounded-xl border border-white/10 text-slate-400 hover:text-white hover:bg-white/5"><RotateCcw size={19}/></button></div>
+        </div>
+        {!focusMode&&<div className="mt-8 max-w-xl mx-auto"><label className="text-sm text-slate-400">Focus on a task <select value={selectedTaskId} onChange={e=>setSelectedTaskId(e.target.value)} className="mt-2 w-full bg-[#0c2118] border border-white/10 rounded-xl px-3 py-3 outline-none focus:border-[#43f58f]"><option value="">No task selected</option>{tasks.map(task=><option key={task.id} value={task.id}>{task.title}</option>)}</select></label></div>}
+      </Card>
+      {!focusMode&&<div className="grid md:grid-cols-3 gap-4 mt-5"><Card><div className="flex items-center gap-3"><Timer size={20} className="text-[#43f58f]"/><div><p className="text-sm text-slate-500">Today's sessions</p><p className="text-2xl font-black mt-1">{todaySessions.length}</p></div></div></Card><Card><div className="flex items-center gap-3"><Target size={20} className="text-[#43f58f]"/><div><p className="text-sm text-slate-500">Focus time</p><p className="text-2xl font-black mt-1">{Math.floor(totalFocusSeconds/60)} min</p></div></div></Card><Card><div className="flex items-center gap-3"><Flame size={20} className="text-[#43f58f]"/><div><p className="text-sm text-slate-500">Focus streak</p><p className="text-2xl font-black mt-1">{focusStreak} days</p></div></div></Card></div>}
+      {!focusMode&&<Card className="mt-5"><div className="flex items-center justify-between gap-3"><div><h2 className="font-black text-lg">Daily focus goal</h2><p className="text-sm text-slate-500 mt-1">{Math.floor(totalFocusSeconds/60)} of 120 minutes</p></div><span className="text-[#43f58f] font-black">{goalPercent}%</span></div><div className="mt-4 h-2 rounded-full bg-white/5 overflow-hidden"><div className="h-full rounded-full bg-[#43f58f] transition-all duration-500" style={{width:`${goalPercent}%`}}/></div></Card>}
+    </div>
+    {celebrating&&<div className="fixed inset-0 z-[60] pointer-events-none grid place-items-center"><div className="focus-confetti" aria-hidden="true">{Array.from({length:18},(_,index)=><span key={index} style={{"--i":index} as React.CSSProperties}/>)}</div><div className="pointer-events-auto glass rounded-2xl px-6 py-5 text-center animate-rise"><Bell size={24} className="mx-auto text-[#43f58f]"/><p className="font-black mt-2">Session complete</p><p className="text-sm text-slate-400 mt-1">Nice work. Take a mindful break.</p><button type="button" onClick={()=>setCelebrating(false)} className="mt-4 text-sm font-bold text-[#43f58f]">Continue</button></div></div>}
+  </div>
 }
 
 function Dashboard({user,profile}:{user:any;profile:Profile|null}){
@@ -455,24 +553,26 @@ function Journal({user}:{user:any}){
   const [busy,setBusy]=useState(true);
   const [saving,setSaving]=useState(false);
   const [dirty,setDirty]=useState(false);
+  const [saveError,setSaveError]=useState("");
   const journalDate=today();
 
   useEffect(()=>{
-    supabase.from("journals").select("journal_date,achieved,learned").eq("user_id",user.id).order("journal_date",{ascending:false}).then(({data})=>{
+    supabase.from("journals").select("journal_date,achieved,learned").eq("user_id",user.id).order("journal_date",{ascending:false}).then(({data,error})=>{
       const savedEntries=data||[];
       const current=savedEntries.find(entry=>entry.journal_date===journalDate);
-      setEntries(savedEntries);setAchieved(current?.achieved||"");setLearned(current?.learned||"");setBusy(false)
+      setEntries(savedEntries);setAchieved(current?.achieved||"");setLearned(current?.learned||"");
+      if(error)setSaveError(error.message);
+      setBusy(false)
     })
   },[user.id,journalDate]);
 
   async function save(){
-    setSaving(true);
+    setSaving(true);setSaveError("");
     const {error}=await supabase.from("journals").upsert({user_id:user.id,journal_date:journalDate,achieved:achieved.trim(),learned:learned.trim(),updated_at:new Date().toISOString()});
-    if(!error){
-      const entry={journal_date:journalDate,achieved:achieved.trim(),learned:learned.trim()};
-      setEntries(previous=>[entry,...previous.filter(item=>item.journal_date!==journalDate)]);
-      setDirty(false)
-    }
+    if(error){setSaveError(error.message);setSaving(false);return}
+    const entry={journal_date:journalDate,achieved:achieved.trim(),learned:learned.trim()};
+    setEntries(previous=>[entry,...previous.filter(item=>item.journal_date!==journalDate)]);
+    setDirty(false);
     setSaving(false)
   }
 
@@ -483,10 +583,10 @@ function Journal({user}:{user:any}){
     <div className="mb-7"><p className="text-xs tracking-[.25em] text-[#43f58f] font-bold">PRIVATE SPACE • {pretty(journalDate).toUpperCase()}</p><h1 className="text-3xl md:text-4xl font-black mt-2">Daily Journal</h1><p className="text-slate-400 mt-1">Pause, reflect, and keep a record of your growth.</p></div>
     {busy?<TaskSkeleton/>:<>
       <div className="grid lg:grid-cols-2 gap-5">
-        <Card><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl bg-[#43f58f]/10 text-[#43f58f] grid place-items-center"><Check size={20}/></div><div><h2 className="text-xl font-black">What did I achieve today?</h2><p className="text-sm text-slate-500">Celebrate the progress, even if it felt small.</p></div></div><textarea value={achieved} onChange={e=>{setAchieved(e.target.value);setDirty(true)}} placeholder="I made progress on..." className="mt-5 w-full min-h-64 bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none resize-y focus:border-[#43f58f]"/></Card>
-        <Card><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl bg-[#43f58f]/10 text-[#43f58f] grid place-items-center"><BookOpen size={20}/></div><div><h2 className="text-xl font-black">What did I learn today?</h2><p className="text-sm text-slate-500">Capture an insight you want to carry forward.</p></div></div><textarea value={learned} onChange={e=>{setLearned(e.target.value);setDirty(true)}} placeholder="Today I learned..." className="mt-5 w-full min-h-64 bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none resize-y focus:border-[#43f58f]"/></Card>
+        <Card><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl bg-[#43f58f]/10 text-[#43f58f] grid place-items-center"><Check size={20}/></div><div><h2 className="text-xl font-black">What did I achieve today?</h2><p className="text-sm text-slate-500">Celebrate the progress, even if it felt small.</p></div></div><textarea value={achieved} onChange={e=>{setAchieved(e.target.value);setDirty(true);setSaveError("")}} placeholder="I made progress on..." className="mt-5 w-full min-h-64 bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none resize-y focus:border-[#43f58f]"/></Card>
+        <Card><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl bg-[#43f58f]/10 text-[#43f58f] grid place-items-center"><BookOpen size={20}/></div><div><h2 className="text-xl font-black">What did I learn today?</h2><p className="text-sm text-slate-500">Capture an insight you want to carry forward.</p></div></div><textarea value={learned} onChange={e=>{setLearned(e.target.value);setDirty(true);setSaveError("")}} placeholder="Today I learned..." className="mt-5 w-full min-h-64 bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none resize-y focus:border-[#43f58f]"/></Card>
       </div>
-      <div className="mt-5 flex items-center gap-4"><Btn onClick={save}>{saving?"Saving...":currentSaved&&!dirty?"Saved ✓":"Save today's journal"}</Btn><span className="text-xs text-slate-500">Private to your account</span></div>
+      <div className="mt-5 flex flex-wrap items-center gap-4"><Btn onClick={save}>{saving?"Saving...":currentSaved&&!dirty?"Saved ✓":"Save today's journal"}</Btn><span className="text-xs text-slate-500">Private to your account</span>{saveError&&<span role="alert" className="text-xs text-red-300">Could not save: {saveError}</span>}</div>
       <Card className="mt-8">
         <div className="flex items-center justify-between gap-3 mb-5"><div><h2 className="text-xl font-black">View journals</h2><p className="text-sm text-slate-500">Open a saved reflection by date.</p></div><BookOpen size={20} className="text-[#43f58f]"/></div>
         {entries.length===0?<p className="py-6 text-sm text-slate-500">Your saved journals will appear here.</p>:<div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">{entries.map(entry=><button key={entry.journal_date} onClick={()=>setViewedDate(entry.journal_date)} className={`text-left px-4 py-3 rounded-xl border transition-colors ${viewedDate===entry.journal_date?"border-[#43f58f]/40 bg-[#43f58f]/10":"border-white/10 bg-white/[.025] hover:border-white/20"}`}><p className="font-semibold">{pretty(entry.journal_date)}</p><p className="text-xs text-slate-500 mt-1">View journal</p></button>)}</div>}
@@ -591,6 +691,11 @@ function SettingsPage({user,profile,setProfile}:{user:any;profile:Profile|null;s
   const [freq,setFreq]=useState(profile?.report_frequency||"both");
   const [method,setMethod]=useState(profile?.delivery_method||"email");
   const [saved,setSaved]=useState(false);
+  const [focusDurations,setFocusDurations]=useState<FocusDurationSettings>(()=>{
+    try{return {...defaultFocusDurations,...JSON.parse(localStorage.getItem(`be-better-focus-settings-${user.id}`)||"{}")}}
+    catch{return defaultFocusDurations}
+  });
+  const [focusSaved,setFocusSaved]=useState(false);
 
   useEffect(()=>{
     setName(profile?.name||"");
@@ -603,6 +708,11 @@ function SettingsPage({user,profile,setProfile}:{user:any;profile:Profile|null;s
     const v={name,whatsapp:wa,report_frequency:freq,delivery_method:method,updated_at:new Date().toISOString()};
     const{data,error}=await supabase.from("profiles").upsert({id:user.id,email:user.email,...v}).select().single();
     if(!error){setProfile(data);setSaved(true);setTimeout(()=>setSaved(false),1800)}
+  }
+
+  function saveFocusSettings(){
+    const next={focus:Math.max(1,Math.min(180,Math.round(focusDurations.focus))),short:Math.max(1,Math.min(60,Math.round(focusDurations.short))),long:Math.max(1,Math.min(120,Math.round(focusDurations.long)))};
+    setFocusDurations(next);localStorage.setItem(`be-better-focus-settings-${user.id}`,JSON.stringify(next));setFocusSaved(true);setTimeout(()=>setFocusSaved(false),1800)
   }
 
   const deliveryOptions=[["email","Email",Mail],["whatsapp","WhatsApp",MessageCircle],["both","Both",Send]] as const;
@@ -642,6 +752,13 @@ function SettingsPage({user,profile,setProfile}:{user:any;profile:Profile|null;s
           <p className="text-xs text-slate-500">WhatsApp/email sending needs a configured provider in Supabase Edge Functions. The app never pretends a report was sent when the provider is not configured.</p>
           <Btn onClick={save}>{saved?"Saved ✓":"Save settings"}</Btn>
         </div>
+      </Card>
+      <Card className="max-w-2xl mt-5">
+        <div className="flex items-center gap-3 mb-5"><Timer size={20} className="text-[#43f58f]"/><div><h2 className="text-xl font-black">Focus timer</h2><p className="text-sm text-slate-500 mt-1">Choose your default Pomodoro durations in minutes.</p></div></div>
+        <div className="grid sm:grid-cols-3 gap-3">
+          {([["focus","Focus"],["short","Short break"],["long","Long break"]] as const).map(([key,label])=><label key={key} className="block"><span className="text-sm text-slate-400">{label}</span><input type="number" min="1" max={key==="focus"?180:key==="short"?60:120} value={focusDurations[key]} onChange={event=>setFocusDurations(previous=>({...previous,[key]:Number(event.target.value)}))} className="mt-1 w-full bg-white/5 border border-white/10 rounded-xl px-3 py-3 outline-none focus:border-[#43f58f]"/></label>)}
+        </div>
+        <div className="mt-4"><Btn onClick={saveFocusSettings}>{focusSaved?"Saved ✓":"Save timer settings"}</Btn></div>
       </Card>
     </>
   )
