@@ -4,7 +4,7 @@ import {today,startWeek,pretty,bestStreak,addDays} from "./lib/date";
 import type {Task,Profile} from "./types";
 import {getDailyQuote} from "./lib/quotes";
 import {Card,Btn,TaskModal,Celebration} from "./components";
-import {LayoutDashboard,BarChart3,CalendarDays,Settings,LogOut,Plus,Check,Trash2,Edit3,Flame,Menu,X,Sun,Mail,MessageCircle,Send,Coffee} from "lucide-react";
+import {LayoutDashboard,BarChart3,CalendarDays,Settings,LogOut,Plus,Check,Trash2,Edit3,Flame,Menu,X,Sun,Mail,MessageCircle,Send,Coffee,Award,BookOpen,Zap} from "lucide-react";
 import {ResponsiveContainer,BarChart,Bar,XAxis,YAxis,Tooltip} from "recharts";
 
 const fallback={quote:"Small steps every day lead to big results.",author:"Be Better"};
@@ -171,7 +171,7 @@ function Shell({user}:{user:any}){
     return()=>window.removeEventListener("keydown",onKey)
   },[mobile]);
 
-  const nav=[["dashboard","Dashboard",LayoutDashboard],["analytics","Analytics",BarChart3],["history","Calendar",CalendarDays],["settings","Settings",Settings]] as const;
+  const nav=[["dashboard","Dashboard",LayoutDashboard],["analytics","Analytics",BarChart3],["journal","Journal",BookOpen],["awards","Awards",Award],["history","Calendar",CalendarDays],["settings","Settings",Settings]] as const;
 
   return (
     <div className="min-h-screen flex">
@@ -207,6 +207,8 @@ function Shell({user}:{user:any}){
         <div className="max-w-7xl mx-auto p-4 md:p-8">
           {page==="dashboard"?<Dashboard user={user} profile={profile}/>
             :page==="analytics"?<Analytics user={user}/>
+            :page==="journal"?<Journal user={user}/>
+            :page==="awards"?<Awards user={user}/>
             :page==="history"?<History user={user}/>
             :<SettingsPage user={user} profile={profile} setProfile={setProfile}/>}
         </div>
@@ -241,6 +243,11 @@ function Dashboard({user,profile}:{user:any;profile:Profile|null}){
   const completedDays=new Set(tasks.filter(t=>t.completed).map(t=>t.due_date));
   let streak=0;const streakDate=new Date(currentDay+"T00:00:00");
   while(completedDays.has(streakDate.toISOString().slice(0,10))){streak++;streakDate.setDate(streakDate.getDate()-1)}
+  const allCompleted=tasks.filter(t=>t.completed).length;
+  const consistencyStreak=bestStreak([...completedDays]);
+  const xp=allCompleted*10+consistencyStreak*5;
+  const level=Math.floor(xp/100)+1;
+  const levelXp=xp%100;
 
   const dayName=useMemo(()=>new Intl.DateTimeFormat(undefined,{weekday:"long"}).format(new Date()).toUpperCase(),[]);
   const greeting=useMemo(()=>{const h=new Date().getHours();return h<12?"Good Morning":h<17?"Good Afternoon":h<21?"Good Evening":"Good Night"},[]);
@@ -267,6 +274,11 @@ function Dashboard({user,profile}:{user:any;profile:Profile|null}){
     <>
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-7">
         <div>
+          <div className="inline-flex items-center gap-3 mb-5 px-3 py-2 rounded-xl bg-[#43f58f]/10 border border-[#43f58f]/20">
+            <div className="w-8 h-8 rounded-lg bg-[#43f58f] text-[#03140b] grid place-items-center font-black">{level}</div>
+            <div><p className="text-xs font-black uppercase tracking-wider text-[#43f58f]">Level {level}</p><p className="text-xs text-slate-400">{xp} XP • {levelXp}/100 to next level</p></div>
+            <Zap size={17} className="text-[#43f58f]"/>
+          </div>
           <p className="text-xs tracking-[.25em] text-[#43f58f] font-bold">{dayName} • {pretty(today())}</p>
           <h1 className="text-3xl md:text-4xl font-black mt-2">{greeting}, {profile?.name||"there"}! 👋</h1>
           <p className="text-slate-400 mt-1">Consistency is the key. Let's make today count.</p>
@@ -407,6 +419,85 @@ function Analytics({user}:{user:any}){
       </Card>
     </>
   )
+}
+
+function Journal({user}:{user:any}){
+  const [achieved,setAchieved]=useState("");
+  const [learned,setLearned]=useState("");
+  const [busy,setBusy]=useState(true);
+  const [saving,setSaving]=useState(false);
+  const [saved,setSaved]=useState(false);
+  const journalDate=today();
+
+  useEffect(()=>{
+    supabase.from("journals").select("achieved,learned").eq("user_id",user.id).eq("journal_date",journalDate).maybeSingle().then(({data})=>{
+      setAchieved(data?.achieved||"");setLearned(data?.learned||"");setBusy(false)
+    })
+  },[user.id,journalDate]);
+
+  async function save(){
+    setSaving(true);setSaved(false);
+    const {error}=await supabase.from("journals").upsert({user_id:user.id,journal_date:journalDate,achieved:achieved.trim(),learned:learned.trim(),updated_at:new Date().toISOString()});
+    if(!error){setSaved(true);setTimeout(()=>setSaved(false),1800)}
+    setSaving(false)
+  }
+
+  return <>
+    <div className="mb-7"><p className="text-xs tracking-[.25em] text-[#43f58f] font-bold">PRIVATE SPACE • {pretty(journalDate).toUpperCase()}</p><h1 className="text-3xl md:text-4xl font-black mt-2">Daily Journal</h1><p className="text-slate-400 mt-1">Pause, reflect, and keep a record of your growth.</p></div>
+    {busy?<TaskSkeleton/>:<div className="grid lg:grid-cols-2 gap-5">
+      <Card><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl bg-[#43f58f]/10 text-[#43f58f] grid place-items-center"><Check size={20}/></div><div><h2 className="text-xl font-black">What did I achieve today?</h2><p className="text-sm text-slate-500">Celebrate the progress, even if it felt small.</p></div></div><textarea value={achieved} onChange={e=>setAchieved(e.target.value)} placeholder="I made progress on..." className="mt-5 w-full min-h-64 bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none resize-y focus:border-[#43f58f]"/></Card>
+      <Card><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl bg-[#43f58f]/10 text-[#43f58f] grid place-items-center"><BookOpen size={20}/></div><div><h2 className="text-xl font-black">What did I learn today?</h2><p className="text-sm text-slate-500">Capture an insight you want to carry forward.</p></div></div><textarea value={learned} onChange={e=>setLearned(e.target.value)} placeholder="Today I learned..." className="mt-5 w-full min-h-64 bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none resize-y focus:border-[#43f58f]"/></Card>
+    </div>}
+    <div className="mt-5 flex items-center gap-4"><Btn onClick={save}>{saving?"Saving...":saved?"Saved ✓":"Save today's journal"}</Btn><span className="text-xs text-slate-500">Private to your account</span></div>
+  </>
+}
+
+function Awards({user}:{user:any}){
+  const [tasks,setTasks]=useState<Task[]>([]);
+  const [busy,setBusy]=useState(true);
+
+  useEffect(()=>{
+    supabase.from("tasks").select("*").eq("user_id",user.id).order("due_date",{ascending:true}).then(({data})=>{
+      setTasks(data||[]);setBusy(false)
+    })
+  },[user.id]);
+
+  const completed=tasks.filter(task=>task.completed);
+  const completedDates=[...new Set(completed.map(task=>task.due_date))].sort();
+  const earlyBirds=completed.filter(task=>task.completed_at&&new Date(task.completed_at).getHours()<9).length;
+  const hasComeback=completedDates.some((date,index)=>index>0&&new Date(date+"T00:00:00").getTime()-new Date(completedDates[index-1]+"T00:00:00").getTime()>=7*86400000);
+  const streak=bestStreak(completedDates);
+  const challenges=[
+    {name:"First Step",description:"Complete your very first task and begin building momentum.",progress:Math.min(completed.length,1),target:1,icon:Flame},
+    {name:"100 Tasks",description:"Complete 100 tasks through steady, meaningful progress.",progress:Math.min(completed.length,100),target:100,icon:Award},
+    {name:"Early Bird",description:"Complete 5 tasks before 9:00 AM and start the day with a win.",progress:Math.min(earlyBirds,5),target:5,icon:Sun},
+    {name:"Comeback",description:"Return to your routine after a break of at least 7 days.",progress:hasComeback?1:0,target:1,icon:Flame},
+    {name:"Seven-Day Streak",description:"Complete tasks on seven consecutive days.",progress:Math.min(streak,7),target:7,icon:Award}
+  ];
+  const earnedCount=challenges.filter(challenge=>challenge.progress>=challenge.target).length;
+
+  return <>
+    <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-7">
+      <div><p className="text-xs tracking-[.25em] text-[#43f58f] font-bold">RECOGNITION • PROGRESS</p><h1 className="text-3xl md:text-4xl font-black mt-2">Awards & Milestones</h1><p className="text-slate-400 mt-1">Small wins become proof that you are changing.</p></div>
+      <div className="flex items-center gap-2 text-sm text-slate-400"><Award size={18} className="text-[#43f58f]"/>{earnedCount} badges earned</div>
+    </div>
+    {busy?<TaskSkeleton/>:<div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
+      {challenges.map(({name,description,progress,target,icon:Icon})=>{
+        const earned=progress>=target;
+        const percentage=Math.round(progress/target*100);
+        return <Card key={name} className={earned?"border-[#43f58f]/30 glow":""}>
+          <div className="flex items-start justify-between gap-3">
+            <div className={`w-12 h-12 rounded-2xl grid place-items-center border ${earned?"bg-[#43f58f]/15 border-[#43f58f]/40 text-[#43f58f]":"bg-white/5 border-white/10 text-slate-500"}`}><Icon size={24}/></div>
+            {earned&&<span className="text-xs font-bold uppercase tracking-wider text-[#43f58f]">Badge earned</span>}
+          </div>
+          <h2 className="text-xl font-black mt-5">{name}</h2>
+          <p className="text-sm text-slate-400 mt-2 min-h-10">{description}</p>
+          <div className="mt-5 flex justify-between text-xs"><span className={earned?"text-[#43f58f]":"text-slate-500"}>{earned?"Completed":"In progress"}</span><span className="text-slate-400">{progress}/{target}</span></div>
+          <div className="mt-2 h-2 rounded-full bg-white/5 overflow-hidden"><div className="h-full rounded-full bg-[#43f58f] transition-all duration-500" style={{width:`${percentage}%`}}/></div>
+        </Card>
+      })}
+    </div>}
+  </>
 }
 
 function History({user}:{user:any}){
