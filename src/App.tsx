@@ -9,6 +9,24 @@ import {ResponsiveContainer,BarChart,Bar,XAxis,YAxis,Tooltip} from "recharts";
 
 const fallback={quote:"Small steps every day lead to big results.",author:"Be Better"};
 
+function achievementProgress(tasks:Task[],loginDates:string[]){
+  const completed=tasks.filter(task=>task.completed);
+  const dates=[...new Set(completed.map(task=>task.due_date))].sort();
+  const streak=bestStreak(dates);
+  const earlyBirds=completed.filter(task=>task.completed_at&&new Date(task.completed_at).getHours()<9).length;
+  const loginStreak=bestStreak(loginDates);
+  return [
+    {name:"First Step",progress:Math.min(completed.length,1),target:1,reward:100},
+    {name:"30 Tasks",progress:Math.min(completed.length,30),target:30,reward:100},
+    {name:"100 Tasks",progress:Math.min(completed.length,100),target:100,reward:100},
+    {name:"Early Bird",progress:Math.min(earlyBirds,5),target:5,reward:100},
+    {name:"Comeback",progress:Math.min(loginStreak,100),target:100,reward:1000},
+    {name:"Seven-Day Streak",progress:Math.min(streak,7),target:7,reward:100},
+    {name:"Thirty-Day Streak",progress:Math.min(streak,30),target:30,reward:100},
+    {name:"500 Tasks",progress:Math.min(completed.length,500),target:500,reward:100}
+  ];
+}
+
 export default function App(){
   const [session,setSession]=useState<any>(null);
   const [loading,setLoading]=useState(true);
@@ -165,6 +183,10 @@ function Shell({user}:{user:any}){
   },[user.id]);
 
   useEffect(()=>{
+    supabase.from("login_days").upsert({user_id:user.id,login_date:today()})
+  },[user.id]);
+
+  useEffect(()=>{
     if(!mobile)return;
     const onKey=(e:KeyboardEvent)=>{if(e.key==="Escape")setMobile(false)};
     window.addEventListener("keydown",onKey);
@@ -219,6 +241,7 @@ function Shell({user}:{user:any}){
 
 function Dashboard({user,profile}:{user:any;profile:Profile|null}){
   const [tasks,setTasks]=useState<Task[]>([]);
+  const [loginDates,setLoginDates]=useState<string[]>([]);
   const [restDay,setRestDay]=useState(false);
   const [busy,setBusy]=useState(true);
   const [edit,setEdit]=useState<Task|null|false>(false);
@@ -226,11 +249,12 @@ function Dashboard({user,profile}:{user:any;profile:Profile|null}){
   const [celebrate,setCelebrate]=useState(false);
 
   const load=async()=>{
-    const [{data},{data:rest}]=await Promise.all([
+    const [{data},{data:rest},{data:logins}]=await Promise.all([
       supabase.from("tasks").select("*").eq("user_id",user.id).order("due_date",{ascending:true}).order("created_at"),
-      supabase.from("rest_days").select("rest_date").eq("user_id",user.id).eq("rest_date",today()).maybeSingle()
+      supabase.from("rest_days").select("rest_date").eq("user_id",user.id).eq("rest_date",today()).maybeSingle(),
+      supabase.from("login_days").select("login_date").eq("user_id",user.id).order("login_date",{ascending:true})
     ]);
-    setTasks(data||[]);setRestDay(Boolean(rest));setBusy(false)
+    setTasks(data||[]);setRestDay(Boolean(rest));setLoginDates((logins||[]).map(row=>row.login_date));setBusy(false)
   };
   useEffect(()=>{load();getDailyQuote().then(setQuote)},[user.id]);
 
@@ -245,7 +269,9 @@ function Dashboard({user,profile}:{user:any;profile:Profile|null}){
   while(completedDays.has(streakDate.toISOString().slice(0,10))){streak++;streakDate.setDate(streakDate.getDate()-1)}
   const allCompleted=tasks.filter(t=>t.completed).length;
   const consistencyStreak=bestStreak([...completedDays]);
-  const xp=allCompleted*10+consistencyStreak*5;
+  const earnedAchievements=achievementProgress(tasks,loginDates).filter(challenge=>challenge.progress>=challenge.target);
+  const achievementXp=earnedAchievements.reduce((total,challenge)=>total+challenge.reward,0);
+  const xp=allCompleted*10+consistencyStreak*5+achievementXp;
   const level=Math.floor(xp/100)+1;
   const levelXp=xp%100;
 
@@ -424,56 +450,77 @@ function Analytics({user}:{user:any}){
 function Journal({user}:{user:any}){
   const [achieved,setAchieved]=useState("");
   const [learned,setLearned]=useState("");
+  const [entries,setEntries]=useState<{journal_date:string;achieved:string;learned:string}[]>([]);
+  const [viewedDate,setViewedDate]=useState<string|null>(null);
   const [busy,setBusy]=useState(true);
   const [saving,setSaving]=useState(false);
-  const [saved,setSaved]=useState(false);
+  const [dirty,setDirty]=useState(false);
   const journalDate=today();
 
   useEffect(()=>{
-    supabase.from("journals").select("achieved,learned").eq("user_id",user.id).eq("journal_date",journalDate).maybeSingle().then(({data})=>{
-      setAchieved(data?.achieved||"");setLearned(data?.learned||"");setBusy(false)
+    supabase.from("journals").select("journal_date,achieved,learned").eq("user_id",user.id).order("journal_date",{ascending:false}).then(({data})=>{
+      const savedEntries=data||[];
+      const current=savedEntries.find(entry=>entry.journal_date===journalDate);
+      setEntries(savedEntries);setAchieved(current?.achieved||"");setLearned(current?.learned||"");setBusy(false)
     })
   },[user.id,journalDate]);
 
   async function save(){
-    setSaving(true);setSaved(false);
+    setSaving(true);
     const {error}=await supabase.from("journals").upsert({user_id:user.id,journal_date:journalDate,achieved:achieved.trim(),learned:learned.trim(),updated_at:new Date().toISOString()});
-    if(!error){setSaved(true);setTimeout(()=>setSaved(false),1800)}
+    if(!error){
+      const entry={journal_date:journalDate,achieved:achieved.trim(),learned:learned.trim()};
+      setEntries(previous=>[entry,...previous.filter(item=>item.journal_date!==journalDate)]);
+      setDirty(false)
+    }
     setSaving(false)
   }
 
+  const currentSaved=entries.some(entry=>entry.journal_date===journalDate);
+  const viewedEntry=entries.find(entry=>entry.journal_date===viewedDate);
+
   return <>
     <div className="mb-7"><p className="text-xs tracking-[.25em] text-[#43f58f] font-bold">PRIVATE SPACE • {pretty(journalDate).toUpperCase()}</p><h1 className="text-3xl md:text-4xl font-black mt-2">Daily Journal</h1><p className="text-slate-400 mt-1">Pause, reflect, and keep a record of your growth.</p></div>
-    {busy?<TaskSkeleton/>:<div className="grid lg:grid-cols-2 gap-5">
-      <Card><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl bg-[#43f58f]/10 text-[#43f58f] grid place-items-center"><Check size={20}/></div><div><h2 className="text-xl font-black">What did I achieve today?</h2><p className="text-sm text-slate-500">Celebrate the progress, even if it felt small.</p></div></div><textarea value={achieved} onChange={e=>setAchieved(e.target.value)} placeholder="I made progress on..." className="mt-5 w-full min-h-64 bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none resize-y focus:border-[#43f58f]"/></Card>
-      <Card><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl bg-[#43f58f]/10 text-[#43f58f] grid place-items-center"><BookOpen size={20}/></div><div><h2 className="text-xl font-black">What did I learn today?</h2><p className="text-sm text-slate-500">Capture an insight you want to carry forward.</p></div></div><textarea value={learned} onChange={e=>setLearned(e.target.value)} placeholder="Today I learned..." className="mt-5 w-full min-h-64 bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none resize-y focus:border-[#43f58f]"/></Card>
-    </div>}
-    <div className="mt-5 flex items-center gap-4"><Btn onClick={save}>{saving?"Saving...":saved?"Saved ✓":"Save today's journal"}</Btn><span className="text-xs text-slate-500">Private to your account</span></div>
+    {busy?<TaskSkeleton/>:<>
+      <div className="grid lg:grid-cols-2 gap-5">
+        <Card><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl bg-[#43f58f]/10 text-[#43f58f] grid place-items-center"><Check size={20}/></div><div><h2 className="text-xl font-black">What did I achieve today?</h2><p className="text-sm text-slate-500">Celebrate the progress, even if it felt small.</p></div></div><textarea value={achieved} onChange={e=>{setAchieved(e.target.value);setDirty(true)}} placeholder="I made progress on..." className="mt-5 w-full min-h-64 bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none resize-y focus:border-[#43f58f]"/></Card>
+        <Card><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl bg-[#43f58f]/10 text-[#43f58f] grid place-items-center"><BookOpen size={20}/></div><div><h2 className="text-xl font-black">What did I learn today?</h2><p className="text-sm text-slate-500">Capture an insight you want to carry forward.</p></div></div><textarea value={learned} onChange={e=>{setLearned(e.target.value);setDirty(true)}} placeholder="Today I learned..." className="mt-5 w-full min-h-64 bg-white/5 border border-white/10 rounded-xl px-4 py-3 outline-none resize-y focus:border-[#43f58f]"/></Card>
+      </div>
+      <div className="mt-5 flex items-center gap-4"><Btn onClick={save}>{saving?"Saving...":currentSaved&&!dirty?"Saved ✓":"Save today's journal"}</Btn><span className="text-xs text-slate-500">Private to your account</span></div>
+      <Card className="mt-8">
+        <div className="flex items-center justify-between gap-3 mb-5"><div><h2 className="text-xl font-black">View journals</h2><p className="text-sm text-slate-500">Open a saved reflection by date.</p></div><BookOpen size={20} className="text-[#43f58f]"/></div>
+        {entries.length===0?<p className="py-6 text-sm text-slate-500">Your saved journals will appear here.</p>:<div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">{entries.map(entry=><button key={entry.journal_date} onClick={()=>setViewedDate(entry.journal_date)} className={`text-left px-4 py-3 rounded-xl border transition-colors ${viewedDate===entry.journal_date?"border-[#43f58f]/40 bg-[#43f58f]/10":"border-white/10 bg-white/[.025] hover:border-white/20"}`}><p className="font-semibold">{pretty(entry.journal_date)}</p><p className="text-xs text-slate-500 mt-1">View journal</p></button>)}</div>}
+        {viewedEntry&&<div className="mt-5 grid md:grid-cols-2 gap-4 border-t border-white/10 pt-5"><div><p className="text-xs uppercase tracking-wider text-[#43f58f] font-bold">What I achieved</p><p className="text-sm text-slate-300 mt-2 whitespace-pre-wrap">{viewedEntry.achieved||"No achievement written."}</p></div><div><p className="text-xs uppercase tracking-wider text-[#43f58f] font-bold">What I learned</p><p className="text-sm text-slate-300 mt-2 whitespace-pre-wrap">{viewedEntry.learned||"No learning written."}</p></div></div>}
+      </Card>
+    </>}
   </>
 }
 
 function Awards({user}:{user:any}){
   const [tasks,setTasks]=useState<Task[]>([]);
+  const [loginDates,setLoginDates]=useState<string[]>([]);
   const [busy,setBusy]=useState(true);
 
   useEffect(()=>{
-    supabase.from("tasks").select("*").eq("user_id",user.id).order("due_date",{ascending:true}).then(({data})=>{
-      setTasks(data||[]);setBusy(false)
+    Promise.all([
+      supabase.from("tasks").select("*").eq("user_id",user.id).order("due_date",{ascending:true}),
+      supabase.from("login_days").select("login_date").eq("user_id",user.id).order("login_date",{ascending:true})
+    ]).then(([taskResult,loginResult])=>{
+      setTasks(taskResult.data||[]);setLoginDates((loginResult.data||[]).map(row=>row.login_date));setBusy(false)
     })
   },[user.id]);
 
-  const completed=tasks.filter(task=>task.completed);
-  const completedDates=[...new Set(completed.map(task=>task.due_date))].sort();
-  const earlyBirds=completed.filter(task=>task.completed_at&&new Date(task.completed_at).getHours()<9).length;
-  const hasComeback=completedDates.some((date,index)=>index>0&&new Date(date+"T00:00:00").getTime()-new Date(completedDates[index-1]+"T00:00:00").getTime()>=7*86400000);
-  const streak=bestStreak(completedDates);
+  const progress=achievementProgress(tasks,loginDates);
   const challenges=[
-    {name:"First Step",description:"Complete your very first task and begin building momentum.",progress:Math.min(completed.length,1),target:1,icon:Flame},
-    {name:"100 Tasks",description:"Complete 100 tasks through steady, meaningful progress.",progress:Math.min(completed.length,100),target:100,icon:Award},
-    {name:"Early Bird",description:"Complete 5 tasks before 9:00 AM and start the day with a win.",progress:Math.min(earlyBirds,5),target:5,icon:Sun},
-    {name:"Comeback",description:"Return to your routine after a break of at least 7 days.",progress:hasComeback?1:0,target:1,icon:Flame},
-    {name:"Seven-Day Streak",description:"Complete tasks on seven consecutive days.",progress:Math.min(streak,7),target:7,icon:Award}
-  ];
+    {name:"First Step",description:"Complete your very first task and begin building momentum.",icon:Flame,accent:"text-amber-300 border-amber-300/40 bg-amber-300/10"},
+    {name:"30 Tasks",description:"Complete 30 tasks and turn intention into a reliable habit.",icon:Check,accent:"text-sky-300 border-sky-300/40 bg-sky-300/10"},
+    {name:"100 Tasks",description:"Complete 100 tasks through steady, meaningful progress.",icon:Award,accent:"text-violet-300 border-violet-300/40 bg-violet-300/10"},
+    {name:"Early Bird",description:"Complete 5 tasks before 9:00 AM and start the day with a win.",icon:Sun,accent:"text-yellow-300 border-yellow-300/40 bg-yellow-300/10"},
+    {name:"Comeback",description:"Now i can do it with all my will , it will be now or never",icon:Flame,accent:"text-rose-300 border-rose-300/40 bg-rose-300/10"},
+    {name:"Seven-Day Streak",description:"Complete tasks on seven consecutive days.",icon:Award,accent:"text-cyan-300 border-cyan-300/40 bg-cyan-300/10"},
+    {name:"Thirty-Day Streak",description:"Complete tasks on 30 consecutive days and prove your consistency.",icon:Award,accent:"text-orange-300 border-orange-300/40 bg-orange-300/10"},
+    {name:"500 Tasks",description:"Complete 500 tasks and build a body of meaningful progress.",icon:Award,accent:"text-fuchsia-300 border-fuchsia-300/40 bg-fuchsia-300/10"}
+  ].map(challenge=>({...challenge,...progress.find(item=>item.name===challenge.name)!}));
   const earnedCount=challenges.filter(challenge=>challenge.progress>=challenge.target).length;
 
   return <>
@@ -482,17 +529,18 @@ function Awards({user}:{user:any}){
       <div className="flex items-center gap-2 text-sm text-slate-400"><Award size={18} className="text-[#43f58f]"/>{earnedCount} badges earned</div>
     </div>
     {busy?<TaskSkeleton/>:<div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
-      {challenges.map(({name,description,progress,target,icon:Icon})=>{
-        const earned=progress>=target;
-        const percentage=Math.round(progress/target*100);
+      {challenges.map(({name,description,progress:current,target,reward,icon:Icon,accent})=>{
+        const earned=current>=target;
+        const percentage=Math.round(current/target*100);
         return <Card key={name} className={earned?"border-[#43f58f]/30 glow":""}>
           <div className="flex items-start justify-between gap-3">
-            <div className={`w-12 h-12 rounded-2xl grid place-items-center border ${earned?"bg-[#43f58f]/15 border-[#43f58f]/40 text-[#43f58f]":"bg-white/5 border-white/10 text-slate-500"}`}><Icon size={24}/></div>
+            <div className={`w-12 h-12 rounded-2xl grid place-items-center border ${earned?accent:"bg-white/5 border-white/10 text-slate-500"}`}><Icon size={24}/></div>
             {earned&&<span className="text-xs font-bold uppercase tracking-wider text-[#43f58f]">Badge earned</span>}
           </div>
           <h2 className="text-xl font-black mt-5">{name}</h2>
           <p className="text-sm text-slate-400 mt-2 min-h-10">{description}</p>
-          <div className="mt-5 flex justify-between text-xs"><span className={earned?"text-[#43f58f]":"text-slate-500"}>{earned?"Completed":"In progress"}</span><span className="text-slate-400">{progress}/{target}</span></div>
+          <div className="mt-4 flex justify-between text-xs"><span className={earned?"text-[#43f58f]":"text-slate-500"}>{earned?"Completed":"In progress"}</span><span className="text-[#43f58f] font-bold">+{reward} XP</span></div>
+          <div className="mt-1 flex justify-end text-xs text-slate-400">{current}/{target}</div>
           <div className="mt-2 h-2 rounded-full bg-white/5 overflow-hidden"><div className="h-full rounded-full bg-[#43f58f] transition-all duration-500" style={{width:`${percentage}%`}}/></div>
         </Card>
       })}
