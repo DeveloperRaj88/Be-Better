@@ -1,10 +1,10 @@
 import {useEffect,useMemo,useState} from "react";
 import {supabase,supabaseConfigError} from "./lib/supabase";
-import {today,startWeek,pretty,bestStreak} from "./lib/date";
+import {today,startWeek,pretty,bestStreak,addDays} from "./lib/date";
 import type {Task,Profile} from "./types";
 import {getDailyQuote} from "./lib/quotes";
 import {Card,Btn,TaskModal,Celebration} from "./components";
-import {LayoutDashboard,BarChart3,CalendarDays,Settings,LogOut,Plus,Check,Trash2,Edit3,Flame,Menu,X,Sun,Mail,MessageCircle,Send} from "lucide-react";
+import {LayoutDashboard,BarChart3,CalendarDays,Settings,LogOut,Plus,Check,Trash2,Edit3,Flame,Menu,X,Sun,Mail,MessageCircle,Send,Coffee} from "lucide-react";
 import {ResponsiveContainer,BarChart,Bar,XAxis,YAxis,Tooltip} from "recharts";
 
 const fallback={quote:"Small steps every day lead to big results.",author:"Be Better"};
@@ -217,20 +217,25 @@ function Shell({user}:{user:any}){
 
 function Dashboard({user,profile}:{user:any;profile:Profile|null}){
   const [tasks,setTasks]=useState<Task[]>([]);
+  const [restDay,setRestDay]=useState(false);
   const [busy,setBusy]=useState(true);
   const [edit,setEdit]=useState<Task|null|false>(false);
   const [quote,setQuote]=useState(fallback);
   const [celebrate,setCelebrate]=useState(false);
 
   const load=async()=>{
-    const {data}=await supabase.from("tasks").select("*").eq("user_id",user.id).order("due_date",{ascending:true}).order("created_at");
-    setTasks(data||[]);setBusy(false)
+    const [{data},{data:rest}]=await Promise.all([
+      supabase.from("tasks").select("*").eq("user_id",user.id).order("due_date",{ascending:true}).order("created_at"),
+      supabase.from("rest_days").select("rest_date").eq("user_id",user.id).eq("rest_date",today()).maybeSingle()
+    ]);
+    setTasks(data||[]);setRestDay(Boolean(rest));setBusy(false)
   };
   useEffect(()=>{load();getDailyQuote().then(setQuote)},[user.id]);
 
   const currentDay=today();
   const todayTasks=tasks.filter(t=>t.due_date===currentDay);
-  const done=todayTasks.filter(t=>t.completed).length,total=todayTasks.length,pct=total?Math.round(done/total*100):0;
+  const visibleTodayTasks=restDay?[]:todayTasks;
+  const done=visibleTodayTasks.filter(t=>t.completed).length,total=visibleTodayTasks.length,pct=total?Math.round(done/total*100):0;
   const weekTasks=tasks.filter(t=>t.due_date>=startWeek()&&t.due_date<=currentDay);
   const weekDone=weekTasks.filter(t=>t.completed).length,weekPct=weekTasks.length?Math.round(weekDone/weekTasks.length*100):0;
   const completedDays=new Set(tasks.filter(t=>t.completed).map(t=>t.due_date));
@@ -240,7 +245,10 @@ function Dashboard({user,profile}:{user:any;profile:Profile|null}){
   const dayName=useMemo(()=>new Intl.DateTimeFormat(undefined,{weekday:"long"}).format(new Date()).toUpperCase(),[]);
   const greeting=useMemo(()=>{const h=new Date().getHours();return h<12?"Good Morning":h<17?"Good Afternoon":h<21?"Good Evening":"Good Night"},[]);
 
-  async function add(v:any){await supabase.from("tasks").insert({...v,user_id:user.id});setEdit(false);load()}
+  async function add(v:any){
+    const tasks=Array.from({length:7},(_,day)=>({...v,user_id:user.id,due_date:addDays(v.due_date,day)}));
+    await supabase.from("tasks").insert(tasks);setEdit(false);load()
+  }
   async function save(v:any){await supabase.from("tasks").update({...v,updated_at:new Date().toISOString()}).eq("id",(edit as Task).id);setEdit(false);load()}
   async function toggle(t:Task){
     const completed=!t.completed;
@@ -249,6 +257,11 @@ function Dashboard({user,profile}:{user:any;profile:Profile|null}){
     if(completed&&done+1===total&&total>0)setCelebrate(true)
   }
   async function del(id:string){if(confirm("Delete this task?")){await supabase.from("tasks").delete().eq("id",id);load()}}
+  async function toggleRestDay(){
+    if(restDay)await supabase.from("rest_days").delete().eq("user_id",user.id).eq("rest_date",currentDay);
+    else await supabase.from("rest_days").upsert({user_id:user.id,rest_date:currentDay});
+    await load()
+  }
 
   return (
     <>
@@ -258,7 +271,10 @@ function Dashboard({user,profile}:{user:any;profile:Profile|null}){
           <h1 className="text-3xl md:text-4xl font-black mt-2">{greeting}, {profile?.name||"there"}! 👋</h1>
           <p className="text-slate-400 mt-1">Consistency is the key. Let's make today count.</p>
         </div>
-        <Btn onClick={()=>setEdit(null)}><Plus size={17} className="inline mr-1"/> Add Task</Btn>
+        <div className="flex flex-wrap gap-2">
+          <Btn secondary onClick={toggleRestDay}><Coffee size={17}/>{restDay?"Work day":"Rest day"}</Btn>
+          <Btn onClick={()=>setEdit(null)}><Plus size={17}/> Add Task</Btn>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-4 mb-5">
@@ -274,9 +290,14 @@ function Dashboard({user,profile}:{user:any;profile:Profile|null}){
             <h2 className="text-xl font-black">Today's Tasks</h2>
             <span className="text-slate-500 text-sm">{done}/{total}</span>
           </div>
-          {busy?<TaskSkeleton/>:todayTasks.length===0?<Empty/>:
+          {busy?<TaskSkeleton/>:restDay?
+            <div className="text-center py-12 text-slate-400">
+              <Coffee size={32} className="mx-auto text-[#43f58f]"/>
+              <p className="mt-3 font-semibold">Today is a rest day</p>
+              <p className="text-sm text-slate-500">Your tasks are waiting for you tomorrow.</p>
+            </div>:visibleTodayTasks.length===0?<Empty/>:
             <div className="space-y-2">
-              {todayTasks.map(t=>
+              {visibleTodayTasks.map(t=>
                 <div key={t.id} className="flex items-center gap-3 p-3 rounded-xl bg-white/[.025] border border-white/5 transition-colors hover:border-white/10">
                   <button onClick={()=>toggle(t)} aria-label={t.completed?`Mark "${t.title}" incomplete`:`Mark "${t.title}" complete`}
                     className={`w-6 h-6 rounded-md border grid place-items-center shrink-0 transition-colors ${t.completed?"bg-[#43f58f] border-[#43f58f] text-[#03140b]":"border-slate-600 hover:border-[#43f58f]"}`}>

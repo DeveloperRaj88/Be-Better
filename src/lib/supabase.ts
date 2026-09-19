@@ -24,5 +24,6 @@ export const supabaseConfigError =
 
 export const supabase = createClient(
   invalidUrl ? "https://placeholder.supabase.co" : url,
-  invalidKey ? "placeholder" : key
+  invalidKey ? "placeholder" : key,
+  {auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}}
 );
