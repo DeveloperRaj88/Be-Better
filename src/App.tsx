@@ -343,6 +343,7 @@ function Dashboard({user,profile}:{user:any;profile:Profile|null}){
   const [restDay,setRestDay]=useState(false);
   const [busy,setBusy]=useState(true);
   const [edit,setEdit]=useState<Task|null|false>(false);
+  const [planningTomorrow,setPlanningTomorrow]=useState(false);
   const [quote,setQuote]=useState(fallback);
   const [celebrate,setCelebrate]=useState(false);
 
@@ -357,7 +358,9 @@ function Dashboard({user,profile}:{user:any;profile:Profile|null}){
   useEffect(()=>{load();getDailyQuote().then(setQuote)},[user.id]);
 
   const currentDay=today();
+  const tomorrow=addDays(currentDay,1);
   const todayTasks=tasks.filter(t=>t.due_date===currentDay);
+  const tomorrowTasks=tasks.filter(t=>t.due_date===tomorrow);
   const visibleTodayTasks=restDay?[]:todayTasks;
   const done=visibleTodayTasks.filter(t=>t.completed).length,total=visibleTodayTasks.length,pct=total?Math.round(done/total*100):0;
   const weekTasks=tasks.filter(t=>t.due_date>=startWeek()&&t.due_date<=currentDay);
@@ -379,6 +382,9 @@ function Dashboard({user,profile}:{user:any;profile:Profile|null}){
   async function add(v:any){
     const tasks=Array.from({length:7},(_,day)=>({...v,user_id:user.id,due_date:addDays(v.due_date,day)}));
     await supabase.from("tasks").insert(tasks);setEdit(false);load()
+  }
+  async function addTomorrow(v:any){
+    await supabase.from("tasks").insert({...v,user_id:user.id});setPlanningTomorrow(false);load()
   }
   async function save(v:any){await supabase.from("tasks").update({...v,updated_at:new Date().toISOString()}).eq("id",(edit as Task).id);setEdit(false);load()}
   async function toggle(t:Task){
@@ -409,6 +415,7 @@ function Dashboard({user,profile}:{user:any;profile:Profile|null}){
         </div>
         <div className="flex flex-wrap gap-2">
           <Btn secondary onClick={toggleRestDay}><Coffee size={17}/>{restDay?"Work day":"Rest day"}</Btn>
+          <Btn secondary onClick={()=>setPlanningTomorrow(true)}><Target size={17}/>Plan Tomorrow</Btn>
           <Btn onClick={()=>setEdit(null)}><Plus size={17}/> Add Task</Btn>
         </div>
       </div>
@@ -465,7 +472,22 @@ function Dashboard({user,profile}:{user:any;profile:Profile|null}){
         </Card>
       </div>
 
+      <Card className="mt-5">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <div><h2 className="text-xl font-black">Tomorrow's Goals</h2><p className="text-sm text-slate-500 mt-1">{pretty(tomorrow)} · {tomorrowTasks.length} {tomorrowTasks.length===1?"goal":"goals"} planned</p></div>
+          <button type="button" onClick={()=>setPlanningTomorrow(true)} className="inline-flex items-center gap-2 text-sm font-bold text-[#43f58f] hover:text-[#8dffbb]"><Plus size={16}/>Add a goal</button>
+        </div>
+        {tomorrowTasks.length===0?<p className="py-5 text-sm text-slate-500">Nothing planned yet. Set a goal for tomorrow.</p>:
+          <div className="space-y-2">{tomorrowTasks.map(task=><div key={task.id} className="flex items-center gap-3 p-3 rounded-xl bg-white/[.025] border border-white/5">
+            <Target size={17} className="shrink-0 text-[#43f58f]"/><div className="min-w-0 flex-1"><p className="font-semibold">{task.title}</p><p className="text-xs text-slate-500">{task.category} · {task.priority}</p></div>
+            <button onClick={()=>setEdit(task)} aria-label={`Edit "${task.title}"`} className="text-slate-500 hover:text-white transition-colors"><Edit3 size={16}/></button>
+            <button onClick={()=>del(task.id)} aria-label={`Delete "${task.title}"`} className="text-slate-500 hover:text-red-400 transition-colors"><Trash2 size={16}/></button>
+          </div>)}</div>
+        }
+      </Card>
+
       {edit!==false&&<TaskModal task={edit||undefined} onClose={()=>setEdit(false)} onSave={edit?save:add}/>}
+      {planningTomorrow&&<TaskModal initialDueDate={tomorrow} onClose={()=>setPlanningTomorrow(false)} onSave={addTomorrow}/>}
       {celebrate&&<Celebration quote={quote} onClose={()=>setCelebrate(false)}/>}
     </>
   )
